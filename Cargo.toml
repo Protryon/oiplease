@@ -5,6 +5,8 @@ edition = "2021"
 authors = ["Protryon <max.bruce12@gmail.com>"]
 license = "Apache-2.0 OR MIT"
 repository = "https://github.com/Protryon/oiplease"
+description = "An OIDC Proxy designed to augment NGINX Ingress Controller"
+keywords = [ "proxy", "oidc", "oauth", "oauth2" ]
 
 [dependencies]
 tokio = { version = "1.27", features = ["full"] }
