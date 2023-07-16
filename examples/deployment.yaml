@@ -1,0 +1,105 @@
+# This example deploys `oiplease` in the `oiplease` namespace.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: oiplease
+  namespace: oiplease
+  labels:
+    app: oiplease
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: oiplease
+  template:
+    metadata:
+      labels:
+        app: oiplease
+    spec:
+      containers:
+      - name: oiplease
+        image: protryon/oiplease:1.0.0
+        imagePullPolicy: Always
+        env:
+        - name: OIPLEASE_CONF
+          value: /config/config.yaml
+        ports:
+        - name: oiplease
+          containerPort: 80
+        volumeMounts:
+        - name: oiplease
+          mountPath: /config/
+      volumes:
+      - name: oiplease
+        configMap:
+          name: oiplease
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: oiplease
+  namespace: oiplease
+  labels:
+    app: oiplease
+data:
+  config.yaml: |
+    bind: 0.0.0.0:80
+    prometheus_bind: 0.0.0.0:9150
+    public: https://my.domain/oi/
+    client_id: my_client_id
+    client_secret: my_client_secret
+    issuer: my_issuer_url
+    jwt_key: my_unique_jwt_key
+    cookie_name: oiplease
+    cookie_domain: my.domain
+    success_header: X-Oi
+    cookie_secure: true
+    # scope: "openid email profile roles"
+    # if not set, then no roles are required. otherwise, all roles are required
+    required_roles:
+    - Example Role
+    # maps headers to claim values, if present
+    header_claims:
+      X-Oi-Email: email
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: oiplease
+  namespace: oiplease
+  labels:
+    app: oiplease
+spec:
+  selector:
+    app: oiplease
+  ports:
+    - protocol: TCP
+      port: 80
+      targetPort: 80
+---
+# ingress for the `oiplease` endpoints.
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: oiplease
+  namespace: manage
+  annotations:
+    nginx.ingress.kubernetes.io/proxy-body-size: "0"
+    nginx.ingress.kubernetes.io/client-max-body-size: "0"
+spec:
+  ingressClassName: nginx
+  rules:
+    - host: my.domain
+      http:
+        paths:
+          - pathType: Prefix
+            backend:
+              service:
+                name: oiplease
+                port:
+                  number: 80
+            path: /oi
+  tls:
+    - hosts:
+      - my.domain
+

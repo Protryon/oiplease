@@ -1,0 +1,33 @@
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: example
+  namespace: example
+  annotations:
+    nginx.ingress.kubernetes.io/proxy-body-size: "0"
+    nginx.ingress.kubernetes.io/client-max-body-size: "0"
+    # the following annotations are required
+    # configuration `public` + `/validate`
+    # this URL can be a cluster-local URL, as it's only reached via NGINX directly
+    nginx.ingress.kubernetes.io/auth-url: "https://my.domain/oi/validate"
+    # configuration `public` + `/login`
+    # this is the URL that NGINX redirects users to. It should be publicly accessible.
+    nginx.ingress.kubernetes.io/auth-signin: "https://my.domain/oi/login"
+    nginx.ingress.kubernetes.io/auth-signin-redirect-param: url
+    # necessary for token refresh
+    nginx.ingress.kubernetes.io/auth-always-set-cookie: "true"
+    # necessary to forward the header added from `header_claims` config
+    nginx.ingress.kubernetes.io/auth-response-headers: X-Oi-Email
+spec:
+  ingressClassName: nginx
+  rules:
+    - host: my.domain
+      http:
+        paths:
+          - pathType: Prefix
+            path: /
+            backend:
+              service:
+                name: example
+                port:
+                  number: 80
