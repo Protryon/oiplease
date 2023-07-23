@@ -37,6 +37,13 @@ pub struct Config {
     // header -> claim
     #[serde(default)]
     pub header_claims: HashMap<String, String>,
+    pub opentelemetry: Option<OtelConfig>,
+}
+
+#[derive(Serialize, Deserialize)]
+pub struct OtelConfig {
+    pub endpoint: Url,
+    pub timeout_sec: f64,
 }
 
 fn default_true() -> bool {
@@ -73,6 +80,7 @@ lazy_static::lazy_static! {
     };
     pub static ref REDIRECT_URL: Url = {
         let mut base = CONFIG.public.clone();
+        base.path_segments_mut().unwrap().pop_if_empty();
         base.path_segments_mut().unwrap().push("auth");
         base
     };

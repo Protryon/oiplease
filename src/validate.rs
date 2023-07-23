@@ -1,29 +1,10 @@
-use anyhow::Result;
+use axol::{Error, Result, Typed};
+use axol_http::{header::HeaderMap, typed_headers::Cookie as CookieHeader};
 use chrono::Utc;
 use cookie::Cookie;
-use http::{Request, Response, StatusCode};
-use hyper::Body;
-use log::{error, info, warn};
+use tracing::{error, info};
 
-use crate::{
-    auth::build_cookie, config::CONFIG, jwt::JwtClaims, jwtc::decompress, oidc::OIDC, status,
-    unauthorized,
-};
-
-fn get_cookie(request: &Request<Body>) -> Result<Option<JwtClaims>> {
-    let Some(cookie) = request.headers().get("cookie") else {
-        return Ok(None);
-    };
-    let cookie = cookie.to_str()?;
-    for cookie in Cookie::split_parse_encoded(cookie) {
-        let cookie = cookie?;
-        if cookie.name() == CONFIG.cookie_name {
-            let decompressed = decompress(cookie.value())?;
-            return Ok(Some(JwtClaims::validate(&decompressed)?));
-        }
-    }
-    Ok(None)
-}
+use crate::{auth::build_cookie, config::CONFIG, jwt::JwtClaims, jwtc::decompress, oidc::OIDC};
 
 enum PostValidation {
     Expired,
@@ -76,52 +57,44 @@ async fn postvalidate_jwt(mut claims: JwtClaims) -> Result<PostValidation> {
     Ok(PostValidation::Pass(claims))
 }
 
-pub async fn validate(request: Request<Body>) -> Response<Body> {
-    let claims = match get_cookie(&request) {
-        Ok(Some(x)) => x,
-        Ok(None) => {
-            return unauthorized();
-        }
-        Err(e) => {
-            warn!("failed to decode jwt: {e:#}");
-            return unauthorized();
-        }
+pub async fn validate(cookies: Option<Typed<CookieHeader>>) -> Result<HeaderMap> {
+    let claims = match &cookies {
+        None => return Err(Error::unauthorized("missing cookies")),
+        Some(header) => header
+            .0
+            .get(&CONFIG.cookie_name)
+            .ok_or_else(|| Error::unauthorized("no cookie set"))?,
     };
+    let decompressed = decompress(claims).map_err(|_| Error::bad_request("malformed jwt"))?;
+    let claims =
+        JwtClaims::validate(&decompressed).map_err(|_| Error::bad_request("invalid jwt"))?;
 
     if claims.issuer != CONFIG.public {
-        return unauthorized();
+        return Err(Error::unauthorized("bad issuer"));
     }
 
-    let mut response = Response::new(Body::empty());
+    let mut headers = HeaderMap::new();
 
     let claims = match postvalidate_jwt(claims).await {
         Err(e) => {
             error!("postvalidation error: {e:#}");
-            return unauthorized();
+            return Err(Error::unauthorized("token invalid"));
         }
-        Ok(PostValidation::Expired) => return unauthorized(),
-        Ok(PostValidation::Forbidden) => return status(StatusCode::FORBIDDEN),
+        Ok(PostValidation::Expired) => return Err(Error::unauthorized("expired token")),
+        Ok(PostValidation::Forbidden) => return Err(Error::Forbidden),
         Ok(PostValidation::Renewed(new_cookie, claims)) => {
-            response.headers_mut().insert(
-                "set-cookie",
-                new_cookie.encoded().to_string().parse().unwrap(),
-            );
+            headers.insert("set-cookie", new_cookie.encoded().to_string());
             claims
         }
         Ok(PostValidation::Pass(claims)) => claims,
     };
 
-    *response.status_mut() = StatusCode::OK;
-    response
-        .headers_mut()
-        .insert(&*CONFIG.success_header, "true".parse().unwrap());
+    headers.insert(&*CONFIG.success_header, "true");
     for (header, claim) in &CONFIG.header_claims {
         if let Some(value) = claims.claims.get(claim) {
-            response
-                .headers_mut()
-                .insert(&**header, value.parse().unwrap());
+            headers.insert(&**header, value);
         }
     }
 
-    response
+    Ok(headers)
 }
