@@ -28,7 +28,7 @@ impl JwtClaims {
         Ok(value.verify_with_key(&*JWT_KEY)?)
     }
 
-    pub fn has_required_roles(&self, roles: &[String]) -> bool {
-        roles.iter().all(|x| self.roles.contains(x))
+    pub fn has_required_roles(&self, roles: &[&str]) -> bool {
+        roles.iter().all(|x| self.roles.iter().any(|y| y == x))
     }
 }

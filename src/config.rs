@@ -1,7 +1,9 @@
 use std::{collections::HashMap, net::SocketAddr};
 
 use hmac::{Hmac, Mac};
+use regex::Regex;
 use serde::{Deserialize, Serialize};
+use serde_with::{serde_as, DisplayFromStr};
 use sha2::Sha256;
 use url::Url;
 
@@ -32,12 +34,108 @@ pub struct Config {
     #[serde(default = "default_true")]
     pub cookie_secure: bool,
     pub cookie_domain: String,
+
     #[serde(default)]
     pub required_roles: Vec<String>,
-    // header -> claim
     #[serde(default)]
     pub header_claims: HashMap<String, String>,
+    #[serde(default)]
+    pub customizations: Vec<Customization>,
     pub opentelemetry: Option<OtelConfig>,
+}
+
+pub struct Customized<'a> {
+    pub required_roles: Vec<&'a str>,
+    pub bypass: bool,
+}
+
+impl Config {
+    pub fn uncustomized(&self) -> Customized<'_> {
+        let required_roles: Vec<&str> = self.required_roles.iter().map(|x| &**x).collect();
+
+        Customized {
+            required_roles,
+            bypass: false,
+        }
+    }
+
+    pub fn customized(&self, host: &str, path: &str) -> Customized<'_> {
+        let mut required_roles: Vec<&str> = self.required_roles.iter().map(|x| &**x).collect();
+        let mut bypass = false;
+
+        for custom in &self.customizations {
+            if custom.filter.matches(host, path) {
+                required_roles.extend(custom.config.required_roles.iter().map(|x| &**x));
+                if custom.config.bypass {
+                    bypass = true;
+                }
+            }
+        }
+        required_roles.sort();
+        required_roles.dedup();
+
+        Customized {
+            required_roles,
+            bypass,
+        }
+    }
+}
+
+#[derive(Serialize, Deserialize)]
+pub struct Customization {
+    pub filter: EndpointFilter,
+    pub config: EndpointConfig,
+}
+
+#[serde_as]
+#[derive(Serialize, Deserialize)]
+pub struct EndpointFilter {
+    pub hostname: Option<String>,
+    #[serde_as(as = "Option<DisplayFromStr>")]
+    pub hostname_regex: Option<Regex>,
+    pub path: Option<String>,
+    pub path_prefix: Option<String>,
+    #[serde_as(as = "Option<DisplayFromStr>")]
+    pub path_regex: Option<Regex>,
+}
+
+impl EndpointFilter {
+    pub fn matches(&self, host: &str, path: &str) -> bool {
+        if let Some(hostname) = &self.hostname {
+            if host != hostname {
+                return false;
+            }
+        }
+        if let Some(hostname_regex) = &self.hostname_regex {
+            if !hostname_regex.is_match(host) {
+                return false;
+            }
+        }
+        if let Some(check_path) = &self.path {
+            if check_path != path {
+                return false;
+            }
+        }
+        if let Some(path_prefix) = &self.path_prefix {
+            if !path.starts_with(path_prefix) {
+                return false;
+            }
+        }
+        if let Some(path_regex) = &self.path_regex {
+            if !path_regex.is_match(path) {
+                return false;
+            }
+        }
+        true
+    }
+}
+
+#[derive(Serialize, Deserialize)]
+pub struct EndpointConfig {
+    #[serde(default)]
+    pub required_roles: Vec<String>,
+    #[serde(default)]
+    pub bypass: bool,
 }
 
 #[derive(Serialize, Deserialize)]

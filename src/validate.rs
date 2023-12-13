@@ -3,8 +3,15 @@ use axol_http::{header::HeaderMap, typed_headers::Cookie as CookieHeader};
 use chrono::Utc;
 use cookie::Cookie;
 use tracing::{error, info};
+use url::Url;
 
-use crate::{auth::build_cookie, config::CONFIG, jwt::JwtClaims, jwtc::decompress, oidc::OIDC};
+use crate::{
+    auth::build_cookie,
+    config::{Customized, CONFIG},
+    jwt::JwtClaims,
+    jwtc::decompress,
+    oidc::OIDC,
+};
 
 enum PostValidation {
     Expired,
@@ -13,12 +20,15 @@ enum PostValidation {
     Pass(JwtClaims),
 }
 
-async fn postvalidate_jwt(mut claims: JwtClaims) -> Result<PostValidation> {
+async fn postvalidate_jwt(
+    mut claims: JwtClaims,
+    customized: &Customized<'_>,
+) -> Result<PostValidation> {
     let now = Utc::now().timestamp();
     if claims.exp < now || claims.iss + CONFIG.login_cache_minutes * 60 < now {
         return Ok(PostValidation::Expired);
     }
-    if !claims.has_required_roles(&CONFIG.required_roles) {
+    if !claims.has_required_roles(&customized.required_roles[..]) {
         return Ok(PostValidation::Forbidden);
     }
     if CONFIG.refresh_tokens
@@ -57,7 +67,27 @@ async fn postvalidate_jwt(mut claims: JwtClaims) -> Result<PostValidation> {
     Ok(PostValidation::Pass(claims))
 }
 
-pub async fn validate(cookies: Option<Typed<CookieHeader>>) -> Result<HeaderMap> {
+pub async fn validate(
+    cookies: Option<Typed<CookieHeader>>,
+    headers_in: HeaderMap,
+) -> Result<HeaderMap> {
+    let original_url = headers_in
+        .get("x-original-url")
+        .and_then(|x| Url::parse(x).ok());
+
+    let customized = if let Some(original_url) = original_url {
+        CONFIG.customized(
+            original_url.host_str().unwrap_or_default(),
+            original_url.path(),
+        )
+    } else {
+        CONFIG.uncustomized()
+    };
+
+    if customized.bypass {
+        return Ok(HeaderMap::new());
+    }
+
     let claims = match &cookies {
         None => return Err(Error::unauthorized("missing cookies")),
         Some(header) => header
@@ -75,7 +105,7 @@ pub async fn validate(cookies: Option<Typed<CookieHeader>>) -> Result<HeaderMap>
 
     let mut headers = HeaderMap::new();
 
-    let claims = match postvalidate_jwt(claims).await {
+    let claims = match postvalidate_jwt(claims, &customized).await {
         Err(e) => {
             error!("postvalidation error: {e:#}");
             return Err(Error::unauthorized("token invalid"));

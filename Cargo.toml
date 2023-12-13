@@ -35,6 +35,8 @@ reqwest-maybe-middleware = "0.2.1"
 reqwest-middleware = "0.2.2"
 reqwest-tracing = { version = "0.4.5", features = ["opentelemetry_0_19"] }
 reqwest = "0.11"
+regex = "1.10"
+serde_with = "3.4"
 
 serde_json = "1.0"
 base64 = "0.21"
