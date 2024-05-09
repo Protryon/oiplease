@@ -1,4 +1,4 @@
-use axol::{Error, Result, Typed};
+use axol::{ConnectInfo, Error, Result, Typed};
 use axol_http::{header::HeaderMap, typed_headers::Cookie as CookieHeader};
 use chrono::Utc;
 use cookie::Cookie;
@@ -70,6 +70,7 @@ async fn postvalidate_jwt(
 pub async fn validate(
     cookies: Option<Typed<CookieHeader>>,
     headers_in: HeaderMap,
+    connect_info: ConnectInfo,
 ) -> Result<HeaderMap> {
     let original_url = headers_in
         .get("x-original-url")
@@ -79,6 +80,7 @@ pub async fn validate(
         CONFIG.customized(
             original_url.host_str().unwrap_or_default(),
             original_url.path(),
+            connect_info.ip(),
         )
     } else {
         CONFIG.uncustomized()

@@ -328,6 +328,15 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "cca491388666e04d7248af3f60f0c40cfb0991c72205595d7c396e3510207d1a"
 
 [[package]]
+name = "cidr"
+version = "0.2.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "8d18b093eba54c9aaa1e3784d4361eb2ba944cf7d0a932a830132238f483e8d8"
+dependencies = [
+ "serde",
+]
+
+[[package]]
 name = "cookie"
 version = "0.17.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1231,7 +1240,7 @@ dependencies = [
 
 [[package]]
 name = "oiplease"
-version = "1.1.0"
+version = "1.2.0"
 dependencies = [
  "always_cell",
  "anyhow",
@@ -1239,6 +1248,7 @@ dependencies = [
  "axol-http",
  "base64 0.21.2",
  "chrono",
+ "cidr",
  "cookie",
  "env_logger",
  "flate2",

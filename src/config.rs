@@ -1,5 +1,9 @@
-use std::{collections::HashMap, net::SocketAddr};
+use std::{
+    collections::HashMap,
+    net::{IpAddr, SocketAddr},
+};
 
+use cidr::IpCidr;
 use hmac::{Hmac, Mac};
 use regex::Regex;
 use serde::{Deserialize, Serialize};
@@ -59,12 +63,12 @@ impl Config {
         }
     }
 
-    pub fn customized(&self, host: &str, path: &str) -> Customized<'_> {
+    pub fn customized(&self, host: &str, path: &str, address: IpAddr) -> Customized<'_> {
         let mut required_roles: Vec<&str> = self.required_roles.iter().map(|x| &**x).collect();
         let mut bypass = false;
 
         for custom in &self.customizations {
-            if custom.filter.matches(host, path) {
+            if custom.filter.matches(host, path, address) {
                 required_roles.extend(custom.config.required_roles.iter().map(|x| &**x));
                 if custom.config.bypass {
                     bypass = true;
@@ -97,10 +101,12 @@ pub struct EndpointFilter {
     pub path_prefix: Option<String>,
     #[serde_as(as = "Option<DisplayFromStr>")]
     pub path_regex: Option<Regex>,
+    #[serde(default)]
+    pub cidr: Vec<IpCidr>,
 }
 
 impl EndpointFilter {
-    pub fn matches(&self, host: &str, path: &str) -> bool {
+    pub fn matches(&self, host: &str, path: &str, address: IpAddr) -> bool {
         if let Some(hostname) = &self.hostname {
             if host != hostname {
                 return false;
@@ -123,6 +129,11 @@ impl EndpointFilter {
         }
         if let Some(path_regex) = &self.path_regex {
             if !path_regex.is_match(path) {
+                return false;
+            }
+        }
+        if !self.cidr.is_empty() {
+            if self.cidr.iter().all(|x| !x.contains(&address)) {
                 return false;
             }
         }
