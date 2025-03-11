@@ -1,4 +1,4 @@
-FROM lukemathwalker/cargo-chef:0.1.61-rust-1.70-slim-buster AS planner
+FROM lukemathwalker/cargo-chef:0.1.68-rust-1.83-slim-bullseye AS planner
 WORKDIR /plan
 
 COPY ./src ./src
@@ -7,7 +7,7 @@ COPY ./Cargo.toml .
 
 RUN cargo chef prepare --recipe-path recipe.json
 
-FROM lukemathwalker/cargo-chef:0.1.61-rust-1.70-buster AS builder
+FROM lukemathwalker/cargo-chef:0.1.68-rust-1.83-bullseye AS builder
 
 WORKDIR /build
 
@@ -21,7 +21,7 @@ COPY ./Cargo.toml .
 
 RUN cargo build --release -p oiplease && mv /build/target/release/oiplease /build/target/oiplease
 
-FROM debian:buster-slim
+FROM debian:bullseye-slim
 WORKDIR /runtime
 
 COPY --from=builder /build/target/oiplease /runtime/oiplease
