@@ -1,26 +1,22 @@
 use always_cell::AlwaysCell;
 use anyhow::{bail, Context, Result};
-use axol::trace::{default_request_header_filter, http_flavor};
-use axol_http::typed_headers::HeaderMap;
+use axol::trace::default_request_header_filter;
 use chrono::{DateTime, Utc};
 use openid::{
     Bearer, Client, CompactJson, CustomClaims, Discovered, Options, StandardClaims, Token,
 };
-use opentelemetry::{Key, StringValue, Value};
+use opentelemetry::{propagation::Injector, StringValue, Value};
+use reqwest::header::{HeaderMap, HeaderName, HeaderValue};
 use reqwest_maybe_middleware::Extensions;
-use reqwest_tracing::{ReqwestOtelSpanBackend, TracingMiddleware};
+use reqwest_middleware::{Middleware, Next};
 use serde::{Deserialize, Serialize};
 use std::{sync::Arc, time::Duration};
 use tokio::sync::RwLock;
-use tracing::{field::Empty, warn, Instrument};
-use tracing_opentelemetry::OtelData;
-use tracing_subscriber::registry::{LookupSpan, SpanData};
+use tracing::{field::Empty, warn, Instrument, Span};
+use tracing_opentelemetry::OpenTelemetrySpanExt;
 use url::Url;
 
-use crate::{
-    config::{CONFIG, REDIRECT_URL},
-    REGISTRY,
-};
+use crate::config::{CONFIG, REDIRECT_URL};
 
 #[derive(Clone)]
 pub struct OidcHandler {
@@ -63,10 +59,11 @@ impl CompactJson for Claims {}
 
 lazy_static::lazy_static! {
     static ref HTTP_CLIENT: reqwest_maybe_middleware::Client = reqwest_middleware::ClientBuilder::new(reqwest::Client::new())
-        .with(TracingMiddleware::<Tracer>::new()).build().into();
+        .with(TracingMiddleware).build().into();
 }
 
-struct Tracer;
+/// Traces outbound OIDC requests and propagates the trace context to the provider.
+struct TracingMiddleware;
 
 fn grouped_headers(headers: &HeaderMap) -> Vec<(&str, Vec<&str>)> {
     let mut names = headers
@@ -85,109 +82,115 @@ fn grouped_headers(headers: &HeaderMap) -> Vec<(&str, Vec<&str>)> {
     out
 }
 
-impl ReqwestOtelSpanBackend for Tracer {
-    fn on_request_start(req: &reqwest::Request, _extension: &mut Extensions) -> tracing::Span {
-        let host = req
-            .headers()
-            .get("host")
-            .and_then(|x| x.to_str().ok())
-            .or(req.url().host_str())
-            .unwrap_or_default();
-        let port = req.url().port().map(|x| x);
-        let user_agent = req
-            .headers()
-            .get("user-agent")
-            .and_then(|x| x.to_str().ok());
-        let name = format!("OIDC {} {}", req.method(), req.url().path());
-        let span = tracing::info_span!(
-            "OIDC Request",
-            http.request.method = %req.method(),
-            network.protocol.version = %http_flavor(req.version()),
-            server.address = %host,
-            server.port = port,
-            url.full = %req.url(),
-            user_agent.original = user_agent,
-            otel.name = name,
-            otel.kind = ?opentelemetry_api::trace::SpanKind::Client,
-            http.response.status_code = Empty, // to set on response
-            otel.status_code = Empty, // to set on response
-            trace_id = Empty, // to set on response
-            request_id = Empty, // to set
-            exception.message = Empty, // to set on response
-        );
-        if let Some(span_id) = span.id() {
-            let span = REGISTRY.span_data(&span_id).expect("missing span");
-            let mut extensions = span.extensions_mut();
-            if let Some(data) = extensions.get_mut::<OtelData>() {
-                let target = data.builder.attributes.as_mut().unwrap();
-                for (name, values) in grouped_headers(req.headers()) {
-                    let values: Vec<StringValue> = values
-                        .into_iter()
-                        .filter_map(|value| (default_request_header_filter)(name, value))
-                        .map(|x| StringValue::from(x.to_string()))
-                        .collect::<Vec<_>>();
-                    if values.is_empty() {
-                        continue;
-                    }
-                    //todo: use static header values?
-                    target.insert(
-                        Key::new(format!("http.request.header.{}", name.replace('-', "_"))),
-                        Value::Array(values.into()),
-                    );
-                }
-            }
-        }
-        span
+fn record_headers(span: &Span, prefix: &str, headers: &HeaderMap) {
+    if span.is_disabled() {
+        return;
     }
+    for (name, values) in grouped_headers(headers) {
+        let values: Vec<StringValue> = values
+            .into_iter()
+            .filter_map(|value| (default_request_header_filter)(name, value))
+            .map(|x| StringValue::from(x.to_string()))
+            .collect::<Vec<_>>();
+        if values.is_empty() {
+            continue;
+        }
+        //todo: use static header values?
+        span.set_attribute(
+            format!("{prefix}.{}", name.replace('-', "_")),
+            Value::Array(values.into()),
+        );
+    }
+}
 
-    fn on_request_end(
-        span: &tracing::Span,
-        outcome: &reqwest_middleware::Result<reqwest::Response>,
-        _extension: &mut Extensions,
-    ) {
-        match outcome {
+fn http_flavor(version: reqwest::Version) -> &'static str {
+    match version {
+        reqwest::Version::HTTP_09 => "0.9",
+        reqwest::Version::HTTP_10 => "1.0",
+        reqwest::Version::HTTP_11 => "1.1",
+        reqwest::Version::HTTP_2 => "2.0",
+        reqwest::Version::HTTP_3 => "3.0",
+        _ => "unknown",
+    }
+}
+
+struct HeaderInjector<'a>(&'a mut HeaderMap);
+
+impl Injector for HeaderInjector<'_> {
+    fn set(&mut self, key: &str, value: String) {
+        if let (Ok(name), Ok(value)) = (HeaderName::try_from(key), HeaderValue::try_from(value)) {
+            self.0.insert(name, value);
+        }
+    }
+}
+
+fn request_span(req: &reqwest::Request) -> Span {
+    let host = req
+        .headers()
+        .get("host")
+        .and_then(|x| x.to_str().ok())
+        .or(req.url().host_str())
+        .unwrap_or_default();
+    let port = req.url().port();
+    let user_agent = req
+        .headers()
+        .get("user-agent")
+        .and_then(|x| x.to_str().ok());
+    let name = format!("OIDC {} {}", req.method(), req.url().path());
+    let span = tracing::info_span!(
+        "OIDC Request",
+        http.request.method = %req.method(),
+        network.protocol.version = http_flavor(req.version()),
+        server.address = %host,
+        server.port = port,
+        url.full = %req.url(),
+        user_agent.original = user_agent,
+        otel.name = name,
+        otel.kind = ?opentelemetry::trace::SpanKind::Client,
+        http.response.status_code = Empty, // to set on response
+        otel.status_code = Empty, // to set on response
+        trace_id = Empty, // to set on response
+        request_id = Empty, // to set
+        exception.message = Empty, // to set on response
+    );
+    record_headers(&span, "http.request.header", req.headers());
+    span
+}
+
+#[async_trait::async_trait]
+impl Middleware for TracingMiddleware {
+    async fn handle(
+        &self,
+        mut req: reqwest::Request,
+        extensions: &mut Extensions,
+        next: Next<'_>,
+    ) -> reqwest_middleware::Result<reqwest::Response> {
+        let span = request_span(&req);
+        let context = span.context();
+        opentelemetry::global::get_text_map_propagator(|propagator| {
+            propagator.inject_context(&context, &mut HeaderInjector(req.headers_mut()))
+        });
+
+        let outcome = next.run(req, extensions).instrument(span.clone()).await;
+        match &outcome {
             Ok(response) => {
                 span.record(
                     "http.response.status_code",
-                    &tracing::field::display(response.status().as_u16()),
+                    tracing::field::display(response.status().as_u16()),
                 );
                 if response.status().is_server_error() {
                     span.record("otel.status_code", "ERROR");
                 } else {
                     span.record("otel.status_code", "OK");
                 }
-
-                if let Some(span_id) = span.id() {
-                    let span = REGISTRY.span_data(&span_id).expect("missing span");
-                    let mut extensions = span.extensions_mut();
-                    if let Some(data) = extensions.get_mut::<OtelData>() {
-                        let target = data.builder.attributes.as_mut().unwrap();
-                        for (name, values) in grouped_headers(response.headers()) {
-                            let values: Vec<StringValue> = values
-                                .into_iter()
-                                .filter_map(|value| (default_request_header_filter)(name, value))
-                                .map(|x| StringValue::from(x.to_string()))
-                                .collect::<Vec<_>>();
-                            if values.is_empty() {
-                                continue;
-                            }
-                            //todo: use static header values?
-                            target.insert(
-                                Key::new(format!(
-                                    "http.response.header.{}",
-                                    name.replace('-', "_")
-                                )),
-                                Value::Array(values.into()),
-                            );
-                        }
-                    }
-                }
+                record_headers(&span, "http.response.header", response.headers());
             }
             Err(e) => {
                 span.record("otel.status_code", "ERROR");
                 span.record("exception.message", e.to_string());
             }
         }
+        outcome
     }
 }
 

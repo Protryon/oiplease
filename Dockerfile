@@ -1,4 +1,4 @@
-FROM lukemathwalker/cargo-chef:0.1.68-rust-1.83-slim-bullseye AS planner
+FROM lukemathwalker/cargo-chef:0.1.78-rust-1.97.1-slim-bullseye AS planner
 WORKDIR /plan
 
 COPY ./src ./src
@@ -7,7 +7,7 @@ COPY ./Cargo.toml .
 
 RUN cargo chef prepare --recipe-path recipe.json
 
-FROM lukemathwalker/cargo-chef:0.1.68-rust-1.83-bullseye AS builder
+FROM lukemathwalker/cargo-chef:0.1.78-rust-1.97.1-bullseye AS builder
 
 WORKDIR /build
 

@@ -1,6 +1,6 @@
 [package]
 name = "oiplease"
-version = "1.2.0"
+version = "1.2.1"
 edition = "2021"
 authors = ["Protryon <max.bruce12@gmail.com>"]
 license = "Apache-2.0 OR MIT"
@@ -23,18 +23,19 @@ openid = { version = "0.12", git = "https://github.com/Protryon/openid.git", fea
 cookie = { version = "0.17.0", features = ["percent-encode"] }
 always_cell = "0.1"
 
-axol = { version = "0.1" } # , git = "https://github.com/Protryon/axol.git"
-axol-http = { version = "0.1" } # , git = "https://github.com/Protryon/axol.git"
-tracing-opentelemetry = "0.19.0"
-tracing-subscriber = "0.3.17"
-opentelemetry = { version = "0.19.0", features = ["rt-tokio"] }
-opentelemetry_api = { version = "0.19.0" }
-opentelemetry-otlp = "0.12.0"
+axol = { version = "0.2" } # , git = "https://github.com/Protryon/axol.git"
+axol-http = { version = "0.2" } # , git = "https://github.com/Protryon/axol.git"
+tracing-opentelemetry = "0.33"
+tracing-subscriber = "0.3.22"
+opentelemetry = "0.32"
+opentelemetry_sdk = { version = "0.32", features = ["rt-tokio"] }
+opentelemetry-otlp = { version = "0.32", default-features = false, features = ["grpc-tonic", "trace"] }
 tracing = { version = "0.1", features = ["log-always", "release_max_level_debug"]}
+# reqwest-middleware/reqwest are pinned to the versions the openid fork builds against
 reqwest-maybe-middleware = "0.2.1"
 reqwest-middleware = "0.2.2"
-reqwest-tracing = { version = "0.4.5", features = ["opentelemetry_0_19"] }
 reqwest = "0.11"
+async-trait = "0.1"
 regex = "1.10"
 serde_with = "3.4"
 cidr = { version = "0.2.2", features = ["serde"] }

@@ -1,17 +1,16 @@
 use std::time::Duration;
 
 use axol::cors::{Any, Cors};
-use axol::trace::RegistryWrapper;
 use axol::{trace::Trace, Router};
 use axol::{Logger, RealIp};
 use axol_http::response::Response;
 use config::{CONFIG, PUBLIC_URL_BASE};
-use opentelemetry::runtime::Tokio;
-use opentelemetry::sdk::propagation::TraceContextPropagator;
-use opentelemetry_otlp::{ExportConfig, Protocol, WithExportConfig};
+use opentelemetry::trace::TracerProvider;
+use opentelemetry_otlp::WithExportConfig;
+use opentelemetry_sdk::propagation::TraceContextPropagator;
+use opentelemetry_sdk::trace::SdkTracerProvider;
 use tracing::{error, info, span, Instrument};
 use tracing_subscriber::layer::SubscriberExt;
-use tracing_subscriber::Registry;
 
 mod config;
 mod jwt;
@@ -31,7 +30,7 @@ async fn cache_control(mut response: Response) -> Response {
     response
 }
 
-fn route(registry: Option<RegistryWrapper>) -> Router {
+fn route() -> Router {
     Router::default()
         .nest(
             &*PUBLIC_URL_BASE,
@@ -46,35 +45,24 @@ fn route(registry: Option<RegistryWrapper>) -> Router {
         // allow origin * is justified in that each route does not perform stateful action.
         // the /login endpoint could be used a redirect loop, but in practice is this avoided from redirect whitelists on the side of the OIDC provider
         .plugin("/", Cors::default().allow_methods(Any).allow_origin("*"))
-        .plugin(
-            "/",
-            registry
-                .map(|x| Trace::default().registry(x))
-                .unwrap_or_default(),
-        )
+        .plugin("/", Trace::default())
         .plugin("/", Logger::default())
 }
 
-async fn run(registry: Option<RegistryWrapper>) {
+async fn run() {
     info!("initializing OIDC...");
     oidc::init().await;
     info!("OIDC initialized");
 
-    let server = axol::Server::bind(CONFIG.bind)
+    let server = axol::Server::bind(CONFIG.bind, route())
+        .await
         .expect("bind failed")
-        .router(route(registry))
         .serve();
     info!("listening on {}", CONFIG.bind);
 
     if let Err(e) = server.await {
         error!("server error: {}", e);
     }
-}
-
-lazy_static::lazy_static! {
-    pub(crate) static ref REGISTRY: RegistryWrapper = {
-        RegistryWrapper::from(Registry::default())
-    };
 }
 
 #[tokio::main]
@@ -84,27 +72,25 @@ async fn main() {
         .init();
     lazy_static::initialize(&CONFIG);
 
-    let registry = if let Some(config) = &CONFIG.opentelemetry {
-        let tracer = opentelemetry_otlp::new_pipeline()
-            .tracing()
-            .with_exporter(
-                opentelemetry_otlp::new_exporter()
-                    .tonic()
-                    .with_export_config(ExportConfig {
-                        endpoint: config.endpoint.to_string(),
-                        protocol: Protocol::Grpc,
-                        timeout: Duration::from_secs_f64(config.timeout_sec),
-                    }),
-            )
-            .install_batch(Tokio)
+    let tracer_provider = if let Some(config) = &CONFIG.opentelemetry {
+        let exporter = opentelemetry_otlp::SpanExporter::builder()
+            .with_tonic()
+            .with_endpoint(config.endpoint.to_string())
+            .with_timeout(Duration::from_secs_f64(config.timeout_sec))
+            .build()
             .expect("tracer init failed");
+        let provider = SdkTracerProvider::builder()
+            .with_batch_exporter(exporter)
+            .build();
 
-        let telemetry = tracing_opentelemetry::layer().with_tracer(tracer);
+        let telemetry =
+            tracing_opentelemetry::layer().with_tracer(provider.tracer(env!("CARGO_PKG_NAME")));
 
-        tracing::subscriber::set_global_default(REGISTRY.clone().with(telemetry)).unwrap();
+        tracing::subscriber::set_global_default(tracing_subscriber::registry().with(telemetry))
+            .unwrap();
         opentelemetry::global::set_text_map_propagator(TraceContextPropagator::default());
         info!("otel tracing initialized");
-        Some(REGISTRY.clone())
+        Some(provider)
     } else {
         None
     };
@@ -115,5 +101,11 @@ async fn main() {
 
     let root = span!(tracing::Level::INFO, "app_start");
 
-    run(registry).instrument(root).await;
+    run().instrument(root).await;
+
+    if let Some(provider) = tracer_provider {
+        if let Err(e) = provider.shutdown() {
+            error!("failed to flush traces: {e}");
+        }
+    }
 }
