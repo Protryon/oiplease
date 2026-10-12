@@ -1,4 +1,4 @@
-FROM lukemathwalker/cargo-chef:0.1.78-rust-1.97.1-slim-bullseye AS planner
+FROM lukemathwalker/cargo-chef:0.1.78-rust-1.97.1-slim-trixie AS planner
 WORKDIR /plan
 
 COPY ./src ./src
@@ -7,7 +7,7 @@ COPY ./Cargo.toml .
 
 RUN cargo chef prepare --recipe-path recipe.json
 
-FROM lukemathwalker/cargo-chef:0.1.78-rust-1.97.1-bullseye AS builder
+FROM lukemathwalker/cargo-chef:0.1.78-rust-1.97.1-trixie AS builder
 
 WORKDIR /build
 
@@ -21,11 +21,11 @@ COPY ./Cargo.toml .
 
 RUN cargo build --release -p oiplease && mv /build/target/release/oiplease /build/target/oiplease
 
-FROM debian:bullseye-slim
+FROM debian:trixie-slim
 WORKDIR /runtime
 
 COPY --from=builder /build/target/oiplease /runtime/oiplease
 
-RUN apt-get update && apt-get install libssl1.1 ca-certificates -y && rm -rf /var/lib/apt/lists/*
+RUN apt-get update && apt-get install libssl3t64 ca-certificates -y && rm -rf /var/lib/apt/lists/*
 
 ENTRYPOINT ["/runtime/oiplease"]
