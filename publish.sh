@@ -10,8 +10,6 @@ fi
 
 export TAG=$1
 
-docker build -t protryon/oiplease:$TAG -f ./Dockerfile .
-docker push protryon/oiplease:$TAG
-docker image rm protryon/oiplease:$TAG
+docker buildx build --platform linux/amd64,linux/arm64 -t protryon/oiplease:$TAG -f ./Dockerfile --push .
 
 echo "Uploaded image protryon/oiplease:$TAG"
